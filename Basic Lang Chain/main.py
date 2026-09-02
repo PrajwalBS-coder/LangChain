@@ -1,23 +1,6 @@
-import os
-
-from fastapi import Depends, FastAPI, Header, HTTPException
+from fastapi import FastAPI
 from langchain.agents import create_agent
 from pydantic import BaseModel
-
-
-API_TOKEN = os.getenv("API_TOKEN", "my-secret-token")
-
-
-def require_token(authorization: str | None = Header(default=None)) -> str:
-    if authorization is None or not authorization.startswith("Bearer "):
-        raise HTTPException(status_code=401, detail="Missing or invalid Authorization header")
-
-    token = authorization.split(" ", 1)[1]
-    if token != API_TOKEN:
-        raise HTTPException(status_code=401, detail="Invalid token")
-
-    return token
-
 
 def get_weather(city: str) -> str:
     """Get weather for a given city."""
@@ -48,17 +31,17 @@ def health_check() -> dict[str, str]:
 
 
 @app.get("/weather")
-def get_weather_api(city: str, token: str = Depends(require_token)) -> dict[str, str]:
+def get_weather_api(city: str) -> dict[str, str]:
     return {"city": city, "weather": get_weather(city)}
 
 
 @app.post("/weather")
-def post_weather_api(payload: WeatherRequest, token: str = Depends(require_token)) -> dict[str, str]:
+def post_weather_api(payload: WeatherRequest) -> dict[str, str]:
     return {"city": payload.city, "weather": get_weather(payload.city)}
 
 
 @app.post("/agent/weather")
-def agent_weather_api(payload: AgentWeatherRequest, token: str = Depends(require_token)) -> dict[str, int | str]:
+def agent_weather_api(payload: AgentWeatherRequest) -> dict[str, int | str]:
     result = agent.invoke({"messages": [{"role": "user", "content": payload.message}]})
 
     last_message = result["messages"][-1]
