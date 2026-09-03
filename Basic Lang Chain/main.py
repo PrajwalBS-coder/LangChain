@@ -1,6 +1,64 @@
+import os
+
 from fastapi import FastAPI
 from langchain.agents import create_agent
 from pydantic import BaseModel
+import psycopg
+from dotenv import load_dotenv
+
+
+load_dotenv()
+
+
+def get_database_connection() -> psycopg.Connection:
+    """Create a PostgreSQL connection from the local environment variables."""
+    required_settings = ("DB_USER", "DB_PASSWORD", "DB_HOST", "DB_PORT", "DB_NAME")
+    settings = {setting: os.getenv(setting) for setting in required_settings}
+    missing_settings = [setting for setting, value in settings.items() if not value]
+
+    if missing_settings:
+        missing = ", ".join(missing_settings)
+        raise RuntimeError(f"Missing database settings in .env: {missing}")
+
+    return psycopg.connect(
+        user=settings["DB_USER"],
+        password=settings["DB_PASSWORD"],
+        host=settings["DB_HOST"],
+        port=settings["DB_PORT"],
+        dbname=settings["DB_NAME"],
+    )
+
+
+def save_agent_weather_response(
+    message: str,
+    response: str,
+    input_tokens: int,
+    output_tokens: int,
+) -> None:
+    """Persist an agent weather response in PostgreSQL."""
+    with get_database_connection() as connection:
+        with connection.cursor() as cursor:
+            cursor.execute(
+                """
+                CREATE TABLE IF NOT EXISTS agent_weather_responses (
+                    id BIGSERIAL PRIMARY KEY,
+                    message TEXT NOT NULL,
+                    response TEXT NOT NULL,
+                    input_tokens INTEGER NOT NULL,
+                    output_tokens INTEGER NOT NULL,
+                    created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
+                )
+                """
+            )
+            cursor.execute(
+                """
+                INSERT INTO agent_weather_responses
+                    (message, response, input_tokens, output_tokens)
+                VALUES (%s, %s, %s, %s)
+                """,
+                (message, response, input_tokens, output_tokens),
+            )
+
 
 def get_weather(city: str) -> str:
     """Get weather for a given city."""
@@ -55,12 +113,15 @@ def agent_weather_api(payload: AgentWeatherRequest) -> dict[str, int | str]:
     else:
         response_text = str(response)
 
-    return {
+    response_data = {
         "message": payload.message,
         "response": response_text,
         "input_tokens": usage.get("input_tokens", 0),
         "output_tokens": usage.get("output_tokens", 0),
     }
+    save_agent_weather_response(**response_data)
+
+    return response_data
 
 
 if __name__ == "__main__":
