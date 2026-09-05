@@ -1,4 +1,7 @@
+import logging
 import os
+from urllib.error import URLError
+from urllib.request import urlopen
 
 from fastapi import FastAPI
 from langchain.agents import create_agent
@@ -10,8 +13,45 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-OLLAMA_BASE_URL = os.getenv("OLLAMA_BASE_URL", "http://192.168.1.3:11434")
+logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
+
+REMOTE_OLLAMA_BASE_URL = os.getenv("OLLAMA_BASE_URL", "http://192.168.1.3:11434")
+LOCAL_OLLAMA_BASE_URL = os.getenv("OLLAMA_LOCAL_BASE_URL", "http://localhost:11434")
 OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "mistral")
+
+
+def resolve_ollama_base_url() -> str:
+    """Prefer the remote host when available, otherwise fall back to the local Ollama server."""
+    candidates = [REMOTE_OLLAMA_BASE_URL, LOCAL_OLLAMA_BASE_URL]
+    seen = set()
+
+    for base_url in candidates:
+        if not base_url or base_url in seen:
+            continue
+        seen.add(base_url)
+
+        try:
+            health_url = f"{base_url.rstrip('/')}/api/tags"
+            with urlopen(health_url, timeout=5) as response:
+                status_code = getattr(response, "status", None)
+                if status_code is None:
+                    status_code = getattr(response, "getcode", lambda: 200)()
+                if status_code < 400:
+                    return base_url
+        except Exception:
+            continue
+
+    return LOCAL_OLLAMA_BASE_URL
+
+
+def get_llm() -> ChatOllama:
+    """Return a ChatOllama client using the currently reachable endpoint."""
+    selected_base_url = resolve_ollama_base_url()
+    if selected_base_url == REMOTE_OLLAMA_BASE_URL:
+        logging.info("Using remote Ollama host: %s", selected_base_url)
+    else:
+        logging.info("Using local Ollama host: %s", selected_base_url)
+    return ChatOllama(model=OLLAMA_MODEL, base_url=selected_base_url)
 
 
 def get_database_connection() -> psycopg.Connection:
@@ -69,13 +109,15 @@ def get_weather(city: str) -> str:
     return f"It's always sunny in {city}!"
 
 
-llm = ChatOllama(model=OLLAMA_MODEL, base_url=OLLAMA_BASE_URL)
-
-agent = create_agent(
-    model=llm,
-    tools=[get_weather],
-    system_prompt="You are a helpful assistant. Use the weather tool when asked about weather.",
-)
+def build_agent():
+    """Build a fresh agent using the currently reachable Ollama server."""
+    llm = get_llm()
+    logging.info("Agent built with model=%s and base_url=%s", llm.model, llm.base_url)
+    return create_agent(
+        model=llm,
+        tools=[get_weather],
+        system_prompt="You are a helpful assistant. Use the weather tool when asked about weather.",
+    )
 
 
 app = FastAPI(title="Weather API")
@@ -106,6 +148,7 @@ def post_weather_api(payload: WeatherRequest) -> dict[str, str]:
 
 @app.post("/agent/weather")
 def agent_weather_api(payload: AgentWeatherRequest) -> dict[str, int | str]:
+    agent = build_agent()
     result = agent.invoke({"messages": [{"role": "user", "content": payload.message}]})
 
     last_message = result["messages"][-1]
