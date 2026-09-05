@@ -2,12 +2,16 @@ import os
 
 from fastapi import FastAPI
 from langchain.agents import create_agent
+from langchain_ollama import ChatOllama
 from pydantic import BaseModel
 import psycopg
 from dotenv import load_dotenv
 
 
 load_dotenv()
+
+OLLAMA_BASE_URL = os.getenv("OLLAMA_BASE_URL", "http://192.168.1.3:11434")
+OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "mistral")
 
 
 def get_database_connection() -> psycopg.Connection:
@@ -65,8 +69,10 @@ def get_weather(city: str) -> str:
     return f"It's always sunny in {city}!"
 
 
+llm = ChatOllama(model=OLLAMA_MODEL, base_url=OLLAMA_BASE_URL)
+
 agent = create_agent(
-    model="ollama:mistral",
+    model=llm,
     tools=[get_weather],
     system_prompt="You are a helpful assistant. Use the weather tool when asked about weather.",
 )
